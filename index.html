@@ -268,15 +268,26 @@ async function runAnalysis() {
   banner.className = 'status-banner';
   banner.innerHTML = '⏳ Disparando Apify HarvestAPI — buscando posts, reactions e comments dos 4 perfis...';
 
+  // 6 minute timeout (mobile networks may need extra slack)
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 360_000);
+
   try {
     const response = await fetch(`${WORKER_URL}/run`, {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+      signal: controller.signal,
     });
 
+    clearTimeout(timeoutId);
+
     if (!response.ok) {
-      const err = await response.json();
-      throw new Error(err.message || `HTTP ${response.status}`);
+      let errMsg = `HTTP ${response.status}`;
+      try {
+        const err = await response.json();
+        errMsg = err.message || err.error || errMsg;
+      } catch (_) {}
+      throw new Error(errMsg);
     }
 
     const data = await response.json();
@@ -286,9 +297,18 @@ async function runAnalysis() {
     banner.className = 'status-banner success';
     banner.innerHTML = `✅ Análise concluída em ${new Date().toLocaleTimeString('pt-BR')} · ${data.stats.uniqueEngagers} engagers · ${data.stats.multiSignal} HOT · ${data.rateLimitRemaining} runs restantes nesta hora`;
   } catch (err) {
-    console.error(err);
+    clearTimeout(timeoutId);
+    console.error('Run failed:', err);
     banner.className = 'status-banner error';
-    banner.innerHTML = `❌ Erro: ${err.message}`;
+
+    let userMsg = err.message;
+    if (err.name === 'AbortError') {
+      userMsg = 'Timeout (>6min). Tenta novamente — pode ser rede móvel instável.';
+    } else if (err.message === 'Load failed' || err.message === 'Failed to fetch') {
+      userMsg = 'Conexão falhou. No mobile, tenta em WiFi ou aguarda 1min e clica de novo.';
+    }
+
+    banner.innerHTML = `❌ Erro: ${userMsg}`;
   } finally {
     btn.disabled = false;
     btnText.textContent = '▶ Rodar Análise';
